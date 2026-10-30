@@ -1,37 +1,61 @@
 #include "indicators.h"
 #include "config.h"
+#include <Wire.h>
 
-void Indicators::begin() {
+void formatTempC(char *out, float tempC) {
+    dtostrf(tempC, 1, 1, out);
+    strcat(out, "C");
+}
+
+bool Indicators::begin() {
     pinMode(PIN_LED_GREEN, OUTPUT);
     pinMode(PIN_LED_RED, OUTPUT);
     pinMode(PIN_BUZZER, OUTPUT);
+
+    Wire.beginTransmission(I2C_ADDR_SSD1306);
+    bool found = Wire.endTransmission() == 0;
+
+    // U8x8 would switch the shared bus to 400 kHz; MLX90614 is rated 100 kHz max.
+    _oled.setBusClock(100000);
     _oled.begin();
     _oled.setFont(u8x8_font_chroma48medium8_r);
+    return found;
 }
 
-void Indicators::drawScreen(const char *bigLine, const char *smallLine,
+void Indicators::drawBle(bool bleConnected) {
+    _oled.drawString(0, 6, bleConnected ? "BLE:OK" : "BLE:--");
+}
+
+void Indicators::showScreen(const char *bigLine, const char *smallLine,
                              float threshold, bool bleConnected) {
-    char buf[17];
+    char buf[17], t[10];
     _oled.clear();
     _oled.draw2x2String(0, 0, bigLine);
     _oled.drawString(0, 3, smallLine);
 
-    snprintf(buf, sizeof(buf), "Thresh:%.1fC", threshold);
+    formatTempC(t, threshold);
+    snprintf(buf, sizeof(buf), "Thresh:%s", t);
     _oled.drawString(0, 5, buf);
-    _oled.drawString(0, 6, bleConnected ? "BLE:OK" : "BLE:--");
+    drawBle(bleConnected);
+
+    _patternActive = false;
+    digitalWrite(PIN_LED_GREEN, LOW);
+    digitalWrite(PIN_LED_RED, LOW);
+    noTone(PIN_BUZZER);
 }
 
-void Indicators::showResult(ResultClass result, float tempC, float threshold, bool bleConnected) {
-    char big[8];
+void Indicators::showResult(ResultClass result, float tempC, float threshold, bool bleConnected,
+                            const char *errText) {
+    char big[10];
     const char *small;
 
     switch (result) {
         case ResultClass::NORMAL:
-            snprintf(big, sizeof(big), "%.1fC", tempC);
+            formatTempC(big, tempC);
             small = "BINH THUONG";
             break;
         case ResultClass::ALARM:
-            snprintf(big, sizeof(big), "%.1fC", tempC);
+            formatTempC(big, tempC);
             small = "CANH BAO: SOT";
             break;
         case ResultClass::SUSPECT:
@@ -39,18 +63,15 @@ void Indicators::showResult(ResultClass result, float tempC, float threshold, bo
             small = "Yeu cau do lai";
             break;
         default: // ERROR
-            strcpy(big, "ERR");
-            small = "Loi cam bien";
+            strcpy(big, "LOI");
+            small = errText;
             break;
     }
-    drawScreen(big, small, threshold, bleConnected);
+    showScreen(big, small, threshold, bleConnected);
 
     _activePattern = result;
     _patternStartMs = millis();
     _patternActive = true;
-    digitalWrite(PIN_LED_GREEN, LOW);
-    digitalWrite(PIN_LED_RED, LOW);
-    noTone(PIN_BUZZER);
 
     if (result == ResultClass::ALARM) {
         tone(PIN_BUZZER, 2000); // 3 beeps/sec handled in tick() via on/off toggling
@@ -84,7 +105,7 @@ void Indicators::tick() {
 
         case ResultClass::SUSPECT:
         case ResultClass::ERROR: {
-            bool blinkOn = (elapsed % (2 * LED_BLINK_PERIOD_MS)) < LED_BLINK_PERIOD_MS;
+            bool blinkOn = (elapsed % LED_BLINK_PERIOD_MS) < LED_BLINK_PERIOD_MS / 2; // 0.2 s period
             digitalWrite(PIN_LED_RED, blinkOn ? HIGH : LOW);
             // Blink pattern latches until the next measurement replaces it —
             // no natural "done" point per spec, so it doesn't self-clear.

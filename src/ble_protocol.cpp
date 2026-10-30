@@ -8,6 +8,29 @@ void BleProtocol::begin() {
     _serial.begin(BLE_BAUD_RATE);
 }
 
+// Collects the whole reply for 500 ms (so it doesn't leak into poll()) and
+// checks that it starts with "OK".
+bool BleProtocol::replyIsOk() {
+    char reply[2] = {0, 0};
+    uint8_t n = 0;
+    unsigned long start = millis();
+    while (millis() - start < 500) {
+        if (_serial.available()) {
+            char c = _serial.read();
+            if (n < 2) reply[n++] = c;
+        }
+    }
+    return reply[0] == 'O' && reply[1] == 'K';
+}
+
+bool BleProtocol::probe() {
+    _serial.print("AT"); // HM-10 takes AT commands without CRLF
+    bool ok = replyIsOk();
+    _serial.print("AT+NOTI1");
+    replyIsOk();
+    return ok;
+}
+
 const char *BleProtocol::statusText(ResultClass r) {
     switch (r) {
         case ResultClass::NORMAL:  return "NORMAL";
@@ -17,9 +40,11 @@ const char *BleProtocol::statusText(ResultClass r) {
     }
 }
 
-void BleProtocol::sendTelemetry(float tempC, ResultClass result) {
-    char payload[24];
-    snprintf(payload, sizeof(payload), "TEMP,%.1f,%s", tempC, statusText(result));
+void BleProtocol::sendTelemetry(float tempC, float ambientC, const char *status) {
+    char payload[32], t[8], a[8];
+    dtostrf(tempC, 1, 1, t);
+    dtostrf(ambientC, 1, 1, a);
+    snprintf(payload, sizeof(payload), "TEMP,%s,%s,%s", t, a, status);
     uint8_t sum = crc8((const uint8_t *)payload, strlen(payload));
     _serial.print(payload);
     _serial.print(',');
@@ -28,11 +53,11 @@ void BleProtocol::sendTelemetry(float tempC, ResultClass result) {
     _serial.print("\r\n");
 }
 
-void BleProtocol::poll(CalibrationData &cal) {
+void BleProtocol::poll(CalibrationData &cal, bool &calMode) {
     while (_serial.available()) {
         char c = _serial.read();
         if (c == '\n') {
-            handleLine(cal);
+            handleLine(cal, calMode);
             _len = 0;
             continue;
         }
@@ -42,11 +67,20 @@ void BleProtocol::poll(CalibrationData &cal) {
         } else {
             _len = 0; // overflow: drop and resync on next line
         }
+        // HM-10 connection notifications (enabled in probe()) have no CRLF.
+        if (_len == 7 && strncmp(_buf, "OK+CONN", 7) == 0) {
+            _connected = true;
+            _len = 0;
+        } else if (_len == 7 && strncmp(_buf, "OK+LOST", 7) == 0) {
+            _connected = false;
+            _len = 0;
+        }
     }
 }
 
-void BleProtocol::handleLine(CalibrationData &cal) {
+void BleProtocol::handleLine(CalibrationData &cal, bool &calMode) {
     _buf[_len] = '\0';
+    _connected = true; // a command can only come from a connected phone
 
     if (strncmp(_buf, "SET_THRESH=", 11) == 0) {
         float v = atof(_buf + 11);
@@ -54,7 +88,7 @@ void BleProtocol::handleLine(CalibrationData &cal) {
             _serial.print("ERR:RANGE\r\n");
             return;
         }
-        cal.threshold = v;
+        cal.threshold = round(v * 10) / 10.0f; // spec: 0.1 C steps
         eeprom_store::save(cal);
         _serial.print("OK\r\n");
 
@@ -77,6 +111,10 @@ void BleProtocol::handleLine(CalibrationData &cal) {
         cal.k1 = k1;
         cal.k2 = k2;
         eeprom_store::save(cal);
+        _serial.print("OK\r\n");
+
+    } else if (strcmp(_buf, "CAL_MODE=1") == 0 || strcmp(_buf, "CAL_MODE=0") == 0) {
+        calMode = _buf[9] == '1';
         _serial.print("OK\r\n");
 
     } else {

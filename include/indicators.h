@@ -5,12 +5,22 @@
 #include <U8x8lib.h>
 #include "measurement.h"
 
+// Writes e.g. "37.5C" into out (needs >= 8 bytes). AVR snprintf has no %f.
+void formatTempC(char *out, float tempC);
+
 // Owns LED/buzzer/OLED. showResult() latches a non-blocking timed pattern;
 // tick() must be called every loop iteration (no delay() anywhere here).
 class Indicators {
 public:
-    void begin();
-    void showResult(ResultClass result, float tempC, float threshold, bool bleConnected);
+    // Returns false if the OLED doesn't answer on I2C (self-test item).
+    bool begin();
+    // errText is the small line shown for ResultClass::ERROR (error code).
+    void showResult(ResultClass result, float tempC, float threshold, bool bleConnected,
+                    const char *errText);
+    // Plain screen (ready / locked / calibration); stops any LED/buzzer pattern.
+    void showScreen(const char *bigLine, const char *smallLine,
+                    float threshold, bool bleConnected);
+    void drawBle(bool bleConnected);
     void tick();
 
 private:
@@ -18,9 +28,6 @@ private:
     unsigned long _patternStartMs = 0;
     ResultClass _activePattern = ResultClass::NORMAL;
     bool _patternActive = false;
-
-    void drawScreen(const char *bigLine, const char *smallLine,
-                    float threshold, bool bleConnected);
 };
 
 #endif // INDICATORS_H

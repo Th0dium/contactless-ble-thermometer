@@ -1,14 +1,13 @@
 #include "measurement.h"
 #include "config.h"
 
-bool takeMeasurement(MLX90614 &sensor, const CalibrationData &cal,
-                      float &outBodyTempC, MeasureStatus &outStatus) {
-    float ambient;
-    if (!sensor.readAmbientTempC(ambient)) {
+bool takeMeasurement(MLX90614 &sensor, float &outSkinC, float &outAmbientC,
+                      MeasureStatus &outStatus) {
+    if (!sensor.readAmbientTempC(outAmbientC)) {
         outStatus = MeasureStatus::SENSOR_ERROR;
         return false;
     }
-    if (ambient < AMBIENT_MIN_C || ambient > AMBIENT_MAX_C) {
+    if (outAmbientC < AMBIENT_MIN_C || outAmbientC > AMBIENT_MAX_C) {
         outStatus = MeasureStatus::ENV_INVALID;
         return false;
     }
@@ -41,11 +40,13 @@ bool takeMeasurement(MLX90614 &sensor, const CalibrationData &cal,
 
     float sum = 0;
     for (uint8_t i = 1; i < SAMPLE_COUNT - 1; i++) sum += samples[i];
-    float trimmedMean = sum / TRIMMED_COUNT;
-
-    outBodyTempC = cal.k1 * trimmedMean + cal.k2;
+    outSkinC = sum / TRIMMED_COUNT;
     outStatus = MeasureStatus::OK;
     return true;
+}
+
+float compensate(float skinC, float ambientC, const CalibrationData &cal) {
+    return skinC + cal.k1 * (skinC - ambientC) + cal.k2;
 }
 
 ResultClass classify(float bodyTempC, float threshold, MeasureStatus status) {

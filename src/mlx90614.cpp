@@ -14,7 +14,7 @@ bool MLX90614::begin() {
 }
 
 bool MLX90614::readWord(uint8_t command, uint16_t &outRaw) {
-    for (uint8_t attempt = 0; attempt < I2C_RETRY_MAX; attempt++) {
+    for (uint8_t attempt = 0; attempt <= I2C_RETRY_MAX; attempt++) { // 1 read + up to 3 re-reads
         Wire.beginTransmission(_addr);
         Wire.write(command);
         if (Wire.endTransmission(false) != 0) continue; // repeated start, no stop
@@ -29,6 +29,7 @@ bool MLX90614::readWord(uint8_t command, uint16_t &outRaw) {
             (uint8_t)((_addr << 1) | 1), lsb, msb
         };
         if (crc8(frame, 5) != pec) continue;
+        if (msb & 0x80) continue; // bit 15 = sensor error flag, value invalid
 
         outRaw = ((uint16_t)msb << 8) | lsb;
         return true;

@@ -1,20 +1,21 @@
 # Firmware — Giám sát thân nhiệt không tiếp xúc qua BLE
 
-Bản khởi đầu (starter build) cho đồ án trong `Requirements_RutGon (1).docx`.
+Bản khởi đầu (starter build) cho đồ án trong `YÊU CẦU.docx`.
 Đã build thành công, **chưa test trên phần cứng thật**.
 
 ```
-RAM:   41.5% (850 / 2048 bytes)
-Flash: 51.8% (16710 / 32256 bytes)   — spec giới hạn ≤75%
+RAM:   50.0% (1025 / 2048 bytes)
+Flash: 61.7% (19916 / 32256 bytes)   — spec giới hạn ≤75%
 ```
 
 ## Cần gì để chạy
 
 - Board ATmega328P (Arduino Uno hoặc tương đương)
 - Cảm biến MLX90614 (module GY-906) — I²C, chân A4/A5
-- Module BLE HM-10 — UART qua SoftwareSerial, chân D10 (RX) / D11 (TX)
-- Màn hình OLED SSD1306 0.96" — I²C, chung bus với MLX90614
-- 2 LED (xanh D5, đỏ D6), còi chip (D9), 2 nút nhấn (D2 chức năng, D3 reset)
+- Module BLE HM-10 — UART qua SoftwareSerial, chân D2 (RX ← TX của HM-10) / D3 (TX → RX của HM-10)
+- Màn hình OLED SSD1306 0.96" — I²C, chung bus với MLX90614 (bus chạy 100 kHz)
+- Nút CHỨC NĂNG D8 (PB0), nút RESET D9 (PB1), còi D10 (PB2),
+  LED đỏ D11 (PB3), LED xanh D12 (PB4) — PB0/PB1/PB3/PB4 theo đúng file YÊU CẦU
 
 Toàn bộ pin mapping và hằng số theo spec nằm trong [include/config.h](include/config.h) —
 sửa số liệu ở đó, không sửa rải trong code.
@@ -57,13 +58,31 @@ và giữ độ trễ cảnh báo ≤200ms như spec yêu cầu.
 - Phân loại 4 nhóm đúng bảng mục 6.2 (nghi ngờ / bình thường / cảnh báo / lỗi)
 - EEPROM: CRC8 bảo vệ, dùng mặc định khi hỏng, chỉ ghi khi giá trị đổi (mục 3.1/3.2)
 - Watchdog 2s tự reset nếu loop treo (mục 5)
-- Flash dưới 75% (51.8%), còn dư địa cho code hiệu chỉnh sau
+- Tự kiểm tra 4 hạng mục khi khởi động, báo `SAN SANG` hoặc mã lỗi (bảng dưới)
+- Nút RESET (PB1): khởi động lại qua watchdog và chạy lại tự kiểm tra
+- Giữ nút CHỨC NĂNG 3s (hoặc lệnh `CAL_MODE=1`): vào/ra chế độ hiệu chuẩn —
+  mỗi lần nhấn hiển thị nhiệt độ da THÔ (chưa bù) và Tamb, gửi gói `RAW`
+- Flash dưới 75% (61.7%)
+
+Mã lỗi trên OLED (dòng nhỏ dưới chữ `LOI`):
+
+```
+E1  cảm biến MLX90614 không trả lời / sai PEC sau 1 + 3 lần đọc
+E2  không thấy màn hình OLED trên I2C (0x3C)
+E3  EEPROM hỏng CRC — đã nạp và ghi lại giá trị mặc định
+E4  HM-10 không trả "OK" cho lệnh AT (lưu ý: nếu điện thoại đang kết nối
+    sẵn lúc bấm RESET thì HM-10 không trả lời AT → cũng báo E4)
+E5  kết quả > 42.5°C (ngoài dải)
+KHOA DO  nhiệt độ môi trường ngoài 16–35°C, tự mở khi về lại bình thường
+```
 
 ## Chưa làm / phải tự bổ sung khi có phần cứng thật
 
-- **K1/K2 mặc định là 1.0/0.0 (không bù gì cả).** Đây là chỗ CHẮC CHẮN phải
-  chỉnh khi có cảm biến thật: đo song song với nhiệt kế y tế đã kiểm định,
+- **Công thức bù: `Tthân = Tda + K1·(Tda − Tmôi trường) + K2`. K1/K2 mặc định
+  là 0/0 (không bù gì cả).** Đây là chỗ CHẮC CHẮN phải chỉnh khi có cảm biến
+  thật: vào chế độ hiệu chuẩn, đo song song với nhiệt kế y tế đã kiểm định,
   rồi gửi lệnh `CALIBRATE=<k1>,<k2>\r\n` qua BLE để lưu lại (xem giao thức dưới).
+  Chưa hiệu chuẩn thì nhiệt độ da trán (~33–35°C) thường ra "Yeu cau do lai".
 - **Chưa test I2C/BLE/OLED thật** — chỉ build-verify (compile sạch), chưa nạp
   vào board nào. Rất có thể cần chỉnh lại địa chỉ I2C hoặc chân SoftwareSerial
   nếu module thực tế khác datasheet giả định.
@@ -73,12 +92,14 @@ và giữ độ trễ cảnh báo ≤200ms như spec yêu cầu.
 
   ```
   Gửi xuống board (qua UART/BLE, kết thúc \r\n):
-    SET_THRESH=37.8          -> OK  |  ERR:RANGE
-    CALIBRATE=1.02,-0.3      -> OK  |  ERR:RANGE | ERR:FORMAT
+    SET_THRESH=37.8          -> OK  |  ERR:RANGE    (làm tròn bước 0.1)
+    CALIBRATE=0.2,-0.3       -> OK  |  ERR:RANGE | ERR:FORMAT   (K1 0..1, K2 -5..5)
+    CAL_MODE=1 / CAL_MODE=0  -> OK                 (vào / ra chế độ hiệu chuẩn)
     GET_STATUS               -> OK
 
   Board gửi lên (1 gói/giây hoặc ngay khi có kết quả mới):
-    TEMP,<giá trị>,<NORMAL|ALARM|SUSPECT|ERROR>,<crc8 hex>
+    TEMP,<giá trị>,<Tmôi trường>,<NORMAL|ALARM|SUSPECT|ERROR|RAW|IDLE|LOCKED|CAL>,<crc8 hex>
+    crc8 = CRC-8/SMBus (đa thức 0x07, init 0x00) tính trên phần trước dấu phẩy cuối
   ```
 
 - **Không có app điện thoại** — dùng app BLE test có sẵn để thử giao thức
@@ -89,8 +110,9 @@ và giữ độ trễ cảnh báo ≤200ms như spec yêu cầu.
 
 - Lỗi "undeclared" thường là thiếu `#include "config.h"` trong file `.h` mới —
   đã gặp 1 lần ở `ble_protocol.h`, đã sửa.
-- Warning `format '%f' expects double` là bình thường (AVR `snprintf` luôn
-  promote `float`→`double` khi in) — không phải lỗi, không ảnh hưởng chạy.
+- Đừng dùng `%f` trong `snprintf` trên AVR: thư viện printf mặc định của
+  avr-libc không hỗ trợ số thực và in ra `?`. Dùng `dtostrf()` (như
+  `formatTempC()` trong `src/indicators.cpp`).
 - Nếu Flash vượt 75% sau khi thêm tính năng: kiểm tra có vô tình `#include`
   `Adafruit_GFX`/`Adafruit_SSD1306` không — dự án này dùng `U8x8lib.h`
   (chế độ text-only) để giữ Flash nhẹ, đừng đổi sang U8g2 full-graphics.

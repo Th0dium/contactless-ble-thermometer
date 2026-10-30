@@ -24,11 +24,20 @@ bool BleProtocol::replyIsOk() {
 }
 
 bool BleProtocol::probe() {
-    _serial.print("AT"); // HM-10 takes AT commands without CRLF
-    bool ok = replyIsOk();
+    // Genuine HM-10 wants bare "AT"; common clones (CC41-A, MLT-BT05) need
+    // CRLF. Retry a few times: the module may still be booting at power-up.
+    const char *eol = nullptr;
+    for (uint8_t i = 0; i < 3 && !eol; i++) {
+        _serial.print("AT");
+        if (replyIsOk()) { eol = ""; break; }
+        _serial.print("AT\r\n");
+        if (replyIsOk()) eol = "\r\n";
+    }
+    if (!eol) return false;
     _serial.print("AT+NOTI1");
+    _serial.print(eol);
     replyIsOk();
-    return ok;
+    return true;
 }
 
 const char *BleProtocol::statusText(ResultClass r) {
